@@ -1,23 +1,22 @@
 # Outlook Entra — SKILL.md
 
 Microsoft Outlook via OAuth 2.0 (device code flow) et Microsoft Graph API.
-Utilise l'app Entra enregistrée de l'utilisateur — aucun service tiers.
+**Lecture seule** — seules les permissions `Mail.Read`, `Calendars.Read`, `Contacts.Read` sont utilisées.
 
 ## Prérequis
 
 - App enregistrée sur **Entra** (Azure AD) avec permissions :
-  - `Mail.Read`, `Mail.Send`, `Calendars.Read`, `Contacts.Read`
+  - `Mail.Read`, `Calendars.Read`, `Contacts.Read`
   - OAuth 2.0 device code flow activé
 - Python 3.8+ avec `requests`
-- Appairage d'un **nœud OpenClaw** avec capability `http` (ex: smartphone Android)
-  — utilisé pour la requête `/devicecode` car l'IP du serveur est blacklistée par Microsoft
+- Appairage d'un **nœud OpenClaw** avec capability `http` (requis uniquement si l'IP du serveur est blacklisted par Microsoft)
 - Fichier `.env` configuré (voir `.env.example`)
 
 ## Installation
 
 ```bash
 # Dépendance Python
-uv pip install requests
+uv pip install requests cryptography
 
 # Copier et éditer la config
 cp .env.example .env
@@ -26,12 +25,9 @@ cp .env.example .env
 
 ## Authentification
 
-### Première authentification
-
-Important: étant donné que Microsoft rejette les requêtes `/devicecode` depuis le serveur, il faut IMPERATIVEMENT utiliser le nœud HTTP pour faire cette première requête:
+### Première authentification (si l'IP du serveur est blacklisted)
 
 ```bash
-# Via le nœud OpenClaw (ex: S25+ de Frederic)
 openclaw nodes invoke \
   --node "S25+ de Frederic" \
   --command "http.request" \
@@ -43,14 +39,9 @@ openclaw nodes invoke \
   }'
 ```
 
-**Le `<TENANT>` dépend de l'organisation :**
+→ Le résultat contient `user_code`. Entrer sur **https://microsoft.com/devicelogin**
 
-- Organisations standard : GUID du tenant (ex: `52ffb8b9-c339-49f6-97ba-7c9bb2ff7482`)
-
-→ Le résultat contient `user_code` et `device_code`. Entrer le code sur **https://microsoft.com/devicelogin**
-
-Puis récupérer le token via poll (à faire directement depuis le serveur ou via le nœud) :
-
+Puis échanger le code contre un token :
 ```bash
 curl -X POST \
   -d "grant_type=urn:ietf:params:oauth:grant-type:device_code" \
@@ -63,11 +54,11 @@ curl -X POST \
 
 ```bash
 python scripts/outlook_auth.py              # Lance le device code flow
-python scripts/outlook_auth.py --status     # Statut du token
-python scripts/outlook_auth.py --revoke     # Révoque et supprime le token
+python scripts/outlook_auth.py --status   # Statut du token
+python scripts/outlook_auth.py --revoke    # Révoque et supprime le token
 ```
 
-## Commandes principales
+## Commandes (lecture seule)
 
 ```bash
 # Statut de connexion
@@ -76,17 +67,17 @@ python scripts/outlook_auth.py --status
 # Lire les derniers messages
 python scripts/outlook_graph.py messages --folder Inbox --top 10
 
-# Lire un message par ID
+# Détail d'un message (corps complet)
 python scripts/outlook_graph.py message <messageId>
-
-# Envoyer un message
-python scripts/outlook_graph.py send \
-  --to recipient@example.com \
-  --subject "Sujet" \
-  --body "Corps du message"
 
 # Lister les dossiers mail
 python scripts/outlook_graph.py folders
+
+# Pièces jointes d'un message
+python scripts/outlook_graph.py attachments <messageId>
+
+# Télécharger une pièce jointe
+python scripts/outlook_graph.py download <attachmentId>
 
 # Événements calendrier
 python scripts/outlook_graph.py events --top 10
@@ -94,36 +85,38 @@ python scripts/outlook_graph.py events --top 10
 # Contacts
 python scripts/outlook_graph.py contacts --top 20
 
-# Marquer message lu / non lu
-python scripts/outlook_graph.py mark-read <messageId>
-python scripts/outlook_graph.py mark-unread <messageId>
-
 # Rechercher dans les mails
 python scripts/outlook_graph.py search "mot-clé"
+
+# Profil utilisateur
+python scripts/outlook_graph.py profile
 ```
 
 ## Variables d'environnement (.env)
 
-| Variable                | Description                              | Exemple                                                             |
-| ----------------------- | ---------------------------------------- | ------------------------------------------------------------------- |
-| `AZURE_TENANT_ID`       | ID du tenant Entra ou nom de domaine     | `fairleaonline.com`                                                 |
-| `AZURE_CLIENT_ID`       | ID de l'app (Application ID)             | `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`                              |
-| `AZURE_CLIENT_SECRET`   | Secret de l'app                          | `~`                                                                 |
-| `OAUTH_TOKEN_URL`       | URL token endpoint                       | `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token`      |
-| `OAUTH_DEVICE_CODE_URL` | URL device code endpoint                 | `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/devicecode` |
-| `MS_GRAPH_BASE_URL`     | Base URL Microsoft Graph                 | `https://graph.microsoft.com/v1.0`                                  |
-| `TOKEN_FILE`            | Chemin du fichier de stockage des tokens | `~/.openclaw/outlook_tokens.json`                                   |
-| `TOKEN_FILE_KEY`        | Clé de chiffrement (optionnel)           | _(vide par défaut)_                                                 |
+| Variable | Description | Exemple |
+|---|---|---|
+| `AZURE_TENANT_ID` | GUID du tenant Entra | `52ffb8b9-…` |
+| `AZURE_CLIENT_ID` | ID de l'app (Application ID) | `xxxxxxxx-…` |
+| `AZURE_CLIENT_SECRET` | Secret de l'app | `~` |
+| `AZURE_REDIRECT_URI` | Redirect URI (device flow : tout fait) | `http://localhost` |
+| `OAUTH_TOKEN_URL` | URL token endpoint | `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token` |
+| `OAUTH_DEVICE_CODE_URL` | URL device code endpoint | `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/devicecode` |
+| `MS_GRAPH_BASE_URL` | Base URL Microsoft Graph | `https://graph.microsoft.com/v1.0` |
+| `TOKEN_FILE` | Chemin du fichier de stockage des tokens | `~/.openclaw/outlook_tokens.json` |
+| `TOKEN_FILE_KEY` | Clé de chiffrement (optionnel) | _(vide par défaut)_ |
 
 ## Structure du skill
 
 ```
 outlook-entra/
 ├── SKILL.md
+├── README.md
 ├── .env.example
+├── .gitignore
 ├── scripts/
 │   ├── outlook_auth.py      # OAuth device code flow + refresh
-│   ├── outlook_graph.py     # Appels Graph API (mail, calendar, contacts)
+│   ├── outlook_graph.py     # Appels Graph API (lecture seule)
 │   └── outlook_token.py     # Module partagé (lecture/refresh tokens)
 └── tests/
     └── test_outlook.py      # Tests unitaires
@@ -133,7 +126,6 @@ outlook-entra/
 
 - Le **device code flow** (RFC 8628) : l'utilisateur authentifie via `https://microsoft.com/devicelogin`. Une seule fois.
 - Les **refresh tokens** sont automatiquement utilisés quand l'access token expire.
-- Les **subscriptions** (webhooks) nécessitent un endpoint HTTPS public — non supporté. Utilisez un cron pour le polling.
 - Si `TOKEN_FILE_KEY` est défini, les tokens sont chiffrés AES-GCM avant stockage.
 - Les erreurs 401 du Graph API déclenchent un refresh automatique.
 

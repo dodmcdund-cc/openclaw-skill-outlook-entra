@@ -1,14 +1,13 @@
 # outlook-entra
 
 Microsoft Outlook / Office 365 via OAuth 2.0 (device code flow) et Microsoft Graph API.
+**Lecture seule** — permissions `Mail.Read`, `Calendars.Read`, `Contacts.Read`.
 
 ## Ce que fait ce skill
 
-- **Lire** des emails, événements calendrier, contacts
-- **Envoyer** des emails
-- **Gérer** les dossiers mail, marquer lu/non lu, déplacer, supprimer
-
-Le token OAuth est chiffré (AES-GCM) avant stockage local.
+- **Lire** des emails, événements calendrier, contacts et pièces jointes
+- **Rechercher** dans les emails
+- Token OAuth chiffré (AES-GCM) avant stockage
 
 ## Prérequis
 
@@ -38,7 +37,6 @@ uv pip install requests cryptography
 Si l'IP du serveur est blacklisted par Microsoft (requiert un nœud avec `http`) :
 
 ```bash
-# Générer le device code via le nœud
 openclaw nodes invoke \
   --node "S25+ de Frederic" \
   --command "http.request" \
@@ -77,11 +75,14 @@ python scripts/outlook_auth.py --status
 # Lire les derniers messages
 python scripts/outlook_graph.py messages --folder Inbox --top 10
 
-# Détail d'un message
+# Détail d'un message (corps complet)
 python scripts/outlook_graph.py message <messageId>
 
-# Envoyer un email
-python scripts/outlook_graph.py send --to addr@example.com --subject "Sujet" --body "Corps"
+# Pièces jointes d'un message
+python scripts/outlook_graph.py attachments <messageId>
+
+# Télécharger une pièce jointe
+python scripts/outlook_graph.py download <messageId> --attach-id <id>
 
 # Dossiers mail
 python scripts/outlook_graph.py folders
@@ -91,6 +92,12 @@ python scripts/outlook_graph.py events --top 10
 
 # Contacts
 python scripts/outlook_graph.py contacts --top 20
+
+# Rechercher dans les mails
+python scripts/outlook_graph.py search "mot-clé"
+
+# Profil utilisateur
+python scripts/outlook_graph.py profile
 
 # Supprimer le token
 python scripts/outlook_auth.py --revoke
@@ -113,10 +120,9 @@ python scripts/outlook_auth.py --revoke
 
 ## Chiffrement des tokens
 
-Les tokens sont chiffrés avec AES-GCM si `TOKEN_FILE_KEY` est défini dans `.env` :
+Les tokens sont chiffrés AES-GCM si `TOKEN_FILE_KEY` est défini dans `.env` :
 
 ```bash
-# Générer une clé
 openssl rand -base64 32
 ```
 
