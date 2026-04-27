@@ -21,6 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import html2text
 import requests
 
 # Load .env
@@ -115,7 +116,16 @@ def cmd_message(args):
     print()
     print("── Corps ──")
     body = m.get("body", {})
-    print(body.get("content", "(vide)"))
+    raw_html = body.get("content", "(vide)")
+    body_type = body.get("contentType", "")
+    if "html" in body_type.lower():
+        h2t = html2text.HTML2Text()
+        h2t.body_width = 0  # no wrap
+        h2t.ignore_links = False
+        md = h2t.handle(raw_html).strip()
+        print(md if md else raw_html)
+    else:
+        print(raw_html)
 
 def cmd_attachments(args):
     data = graph_get(f"/me/messages/{args.message_id}/attachments",
