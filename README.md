@@ -29,7 +29,7 @@ cp .env.example .env
 # Éditer .env : AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
 
 # 3. Installer les dépendances Python
-uv pip install requests cryptography
+uv pip install requests cryptography html2text
 ```
 
 ## Première authentification
@@ -75,8 +75,11 @@ python scripts/outlook_auth.py --status
 # Lire les derniers messages
 python scripts/outlook_graph.py messages --folder Inbox --top 10
 
-# Détail d'un message (corps complet)
+# Détail d'un message (corps complet, Markdown par défaut)
 python scripts/outlook_graph.py message <messageId>
+
+# Détail en HTML brut (pour extraction/collage)
+python scripts/outlook_graph.py message <messageId> --raw
 
 # Pièces jointes d'un message
 python scripts/outlook_graph.py attachments <messageId>
