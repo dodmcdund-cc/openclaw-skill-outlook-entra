@@ -203,6 +203,7 @@ def main():
 
     p_msg = sub.add_parser("message", help="Détail d'un message")
     p_msg.add_argument("message_id")
+    p_msg.add_argument("--raw", action="store_true", help="Renvoyer le HTML brut (sans conversion Markdown)")
 
     p_att = sub.add_parser("attachments", help="Lister les pièces jointes")
     p_att.add_argument("message_id")
