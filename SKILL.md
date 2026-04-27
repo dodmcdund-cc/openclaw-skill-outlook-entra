@@ -16,7 +16,7 @@ Microsoft Outlook via OAuth 2.0 (device code flow) et Microsoft Graph API.
 
 ```bash
 # Dépendance Python
-uv pip install requests cryptography
+uv pip install requests cryptography html2text
 
 # Copier et éditer la config
 cp .env.example .env
@@ -67,8 +67,11 @@ python scripts/outlook_auth.py --status
 # Lire les derniers messages
 python scripts/outlook_graph.py messages --folder Inbox --top 10
 
-# Détail d'un message (corps complet)
+# Détail d'un message (corps complet, Markdown par défaut)
 python scripts/outlook_graph.py message <messageId>
+
+# Détail en HTML brut (pour extraction/collage)
+python scripts/outlook_graph.py message <messageId> --raw
 
 # Lister les dossiers mail
 python scripts/outlook_graph.py folders
