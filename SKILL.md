@@ -1,3 +1,13 @@
+---
+name: outlook-entra
+description: |
+  Microsoft Outlook via OAuth 2.0 (device code flow) et Microsoft Graph API.
+  Lecture seule — Mail.Read, Calendars.Read, Contacts.Read.
+metadata:
+  author: custom
+  version: "1.0"
+---
+
 # Outlook Entra — SKILL.md
 
 Microsoft Outlook via OAuth 2.0 (device code flow) et Microsoft Graph API.
