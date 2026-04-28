@@ -35,30 +35,23 @@ cp .env.example .env
 
 ## Authentification
 
-### Première authentification (si l'IP du serveur est blacklisted)
+### Première authentification (si l'IP du serveur est blacklistée par Microsoft)
 
 ```bash
+# Lire les variables depuis le .env du skill
+AZURE_CLIENT_ID=$(grep AZURE_CLIENT_ID .env | cut -d= -f2)
+AZURE_TENANT_ID=$(grep AZURE_TENANT_ID .env | cut -d= -f2)
+SCOPES_DEVICE_CODE=$(grep SCOPES_DEVICE_CODE .env | cut -d= -f2 | tr -d '"')
+
 openclaw nodes invoke \
   --node "S25+ de Frederic" \
   --command "http.request" \
-  --params '{
-    "url": "https://login.microsoftonline.com/<TENANT>/oauth2/v2.0/devicecode",
-    "method": "POST",
-    "headers": {"Content-Type": "application/x-www-form-urlencoded"},
-    "body": "client_id=<CLIENT_ID>&scope=user.read%20openid%20profile%20offline_access"
-  }'
+  --params "{\"url\": \"https://login.microsoftonline.com/${AZURE_TENANT_ID}/oauth2/v2.0/devicecode\", \"method\": \"POST\", \"headers\": {\"Content-Type\": \"application/x-www-form-urlencoded\"}, \"body\": \"client_id=${AZURE_CLIENT_ID}&scope=${SCOPES_DEVICE_CODE}\"}"
 ```
 
 → Le résultat contient `user_code`. Entrer sur **https://microsoft.com/devicelogin**
 
-Puis échanger le code contre un token :
-```bash
-curl -X POST \
-  -d "grant_type=urn:ietf:params:oauth:grant-type:device_code" \
-  -d "client_id=<CLIENT_ID>" \
-  -d "device_code=<DEVICE_CODE>" \
-  "https://login.microsoftonline.com/<TENANT>/oauth2/v2.0/token"
-```
+Puis échanger le code contre un token via `python scripts/outlook_auth.py --manual-token <device_code>` ou directement via le nœud.
 
 ### Script automatique (si le serveur n'est pas blacklisted)
 
