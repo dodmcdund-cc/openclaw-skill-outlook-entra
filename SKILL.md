@@ -33,12 +33,15 @@ cp .env.example .env
 # ⚠️ Remplir client_id, client_secret, oauth urls dans .env
 ```
 
-## Authentification
+## Authentification (Flow)
 
-### Première authentification (si l'IP du serveur est blacklistée par Microsoft)
+Le device code flow nécessite de contacter Microsoft. Si l'IP du serveur est blacklistée (souvent le cas), **la première requête (device code) passe toujours par le nœud Android**. Les requêtes suivantes (échange de tokens, appels Graph API) sont exécutées en local par les scripts Python.
+
+---
+
+### Étape 1 — Demander un device code (via nœud Android)
 
 ```bash
-# Lire les variables depuis le .env du skill
 AZURE_CLIENT_ID=$(grep AZURE_CLIENT_ID .env | cut -d= -f2)
 AZURE_TENANT_ID=$(grep AZURE_TENANT_ID .env | cut -d= -f2)
 SCOPES_DEVICE_CODE=$(grep SCOPES_DEVICE_CODE .env | cut -d= -f2 | tr -d '"')
@@ -49,16 +52,38 @@ openclaw nodes invoke \
   --params "{\"url\": \"https://login.microsoftonline.com/${AZURE_TENANT_ID}/oauth2/v2.0/devicecode\", \"method\": \"POST\", \"headers\": {\"Content-Type\": \"application/x-www-form-urlencoded\"}, \"body\": \"client_id=${AZURE_CLIENT_ID}&scope=${SCOPES_DEVICE_CODE}\"}"
 ```
 
-→ Le résultat contient `user_code`. Entrer sur **https://microsoft.com/devicelogin**
+Réponse : `user_code` (ex: `JE2ZZYDA7`) + `device_code`.
 
-Puis échanger le code contre un token via `python scripts/outlook_auth.py --manual-token <device_code>` ou directement via le nœud.
+---
 
-### Script automatique (si le serveur n'est pas blacklisted)
+### Étape 2 — L'utilisateur s'authentifie
+
+Aller sur **https://login.microsoft.com/device** et entrer le `user_code`. Délai : 15 minutes.
+
+---
+
+### Étape 3 — Lancer le script d'auth (échange device_code → tokens)
+
+Une fois l'authentification faite, lancer le script Python pour échanger le device_code et sauvegarder les tokens :
 
 ```bash
-python scripts/outlook_auth.py              # Lance le device code flow
-python scripts/outlook_auth.py --status   # Statut du token
-python scripts/outlook_auth.py --revoke    # Révoque et supprime le token
+python scripts/outlook_auth.py
+```
+
+Le script va automatiquement détecter qu'il n'y a pas de token valide et lancer le polling du device_code (en utilisant les variables du .env).
+
+> Si le serveur ne peut pas contacter Microsoft directement, le polling échouera. Voir "Dépannage" ci-dessous.
+
+---
+
+### Commandes utiles
+
+```bash
+# Vérifier le statut du token
+python scripts/outlook_auth.py --status
+
+# Révoquer et supprimer les tokens
+python scripts/outlook_auth.py --revoke
 ```
 
 ## Commandes (lecture seule)
