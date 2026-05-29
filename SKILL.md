@@ -5,7 +5,7 @@ description: |
   Lecture seule — Mail.Read, Calendars.Read, Contacts.Read.
 metadata:
   author: custom
-  version: "1.0"
+  version: "2.0"
 ---
 
 # Outlook Entra — SKILL.md
@@ -18,61 +18,53 @@ Microsoft Outlook via OAuth 2.0 (device code flow) et Microsoft Graph API.
 - App enregistrée sur **Entra** (Azure AD) avec permissions :
   - `Mail.Read`, `Calendars.Read`, `Contacts.Read`
   - OAuth 2.0 device code flow activé
-- Python 3.8+ avec `requests`
-- Appairage d'un **nœud OpenClaw** avec capability `http` (requis uniquement si l'IP du serveur est blacklisted par Microsoft)
+- Python 3.8+ avec `requests`, `html2text`, `cryptography`
+- **Python 3.8+ avec un `.venv` créé dans le répertoire du skill** (`uv venv .venv && uv pip install html2text requests cryptography`)
 - Fichier `.env` configuré (voir `.env.example`)
 
 ## Installation
 
 ```bash
-# Dépendance Python
-uv pip install requests cryptography html2text
+# Créer l'environnement virtuel (obligatoire)
+cd ~/.openclaw/workspace/skills/outlook-entra
+uv venv .venv
+uv pip install html2text requests cryptography
 
 # Copier et éditer la config
 cp .env.example .env
-# ⚠️ Remplir client_id, client_secret, oauth urls dans .env
+# ⚠️ Remplir client_id, client_secret, tenant_id dans .env
 ```
 
 ## Authentification (Flow)
 
-Le device code flow nécessite de contacter Microsoft. Si l'IP du serveur est blacklistée (souvent le cas), **la première requête (device code) passe toujours par le nœud Android**. Les requêtes suivantes (échange de tokens, appels Graph API) sont exécutées en local par les scripts Python.
+Le device code flow (RFC 8628) nécessite une intervention utilisateur unique.
 
----
-
-### Étape 1 — Demander un device code (via nœud Android)
+### Étape 1 — Lancer le script d'auth
 
 ```bash
-AZURE_CLIENT_ID=$(grep AZURE_CLIENT_ID .env | cut -d= -f2)
-AZURE_TENANT_ID=$(grep AZURE_TENANT_ID .env | cut -d= -f2)
-SCOPES_DEVICE_CODE=$(grep SCOPES_DEVICE_CODE .env | cut -d= -f2 | tr -d '"')
-
-openclaw nodes invoke \
-  --node "S25+ de Frederic" \
-  --command "http.request" \
-  --params "{\"url\": \"https://login.microsoftonline.com/${AZURE_TENANT_ID}/oauth2/v2.0/devicecode\", \"method\": \"POST\", \"headers\": {\"Content-Type\": \"application/x-www-form-urlencoded\"}, \"body\": \"client_id=${AZURE_CLIENT_ID}&scope=${SCOPES_DEVICE_CODE}\"}"
+.venv/bin/python scripts/outlook_auth.py
 ```
 
-Réponse : `user_code` (ex: `JE2ZZYDA7`) + `device_code`.
+Le script va :
+1. Demander un device code à Microsoft
+2. Afficher un code utilisateur et une URL de vérification
 
----
+### Étape 2 — S'authentifier
 
-### Étape 2 — L'utilisateur s'authentifie
+Aller sur **https://login.microsoft.com/device** et entrer le code affiché.
+Délai : 15 minutes maximum.
 
-Aller sur **https://login.microsoft.com/device** et entrer le `user_code`. Délai : 15 minutes.
+### Étape 3 — Attendre la confirmation
 
----
+Le script poll automatiquement le endpoint Microsoft jusqu'à obtention du token.
+Une fois confirmé, les tokens sont sauvegardés localement.
 
-### Étape 3 — Lancer le script d'auth (échange device_code → tokens)
+### Fonctionnement des tokens
 
-Une fois l'authentification faite, lancer le script Python pour échanger le device_code et sauvegarder les tokens :
-
-```bash
-python scripts/outlook_auth.py
-```
-
-Le script va automatiquement détecter qu'il n'y a pas de token valide et lancer le polling du device_code (en utilisant les variables du .env).
-
-> Si le serveur ne peut pas contacter Microsoft directement, le polling échouera. Voir "Dépannage" ci-dessous.
+- L'`access_token` expire après ~1h
+- Le `refresh_token` permet d'obtenir un nouvel `access_token` sans intervention
+- Le refresh est **automatisé par cron** toutes les heures (voir section Cron)
+- Si le `refresh_token` expire aussi (plusieurs mois d'inactivité) → relancer le flow complet
 
 ---
 
@@ -80,62 +72,65 @@ Le script va automatiquement détecter qu'il n'y a pas de token valide et lancer
 
 ```bash
 # Vérifier le statut du token
-python scripts/outlook_auth.py --status
+.venv/bin/python scripts/outlook_auth.py --status
+
+# Rafraîchir le token manuellement
+.venv/bin/python scripts/outlook_refresh.py
 
 # Révoquer et supprimer les tokens
-python scripts/outlook_auth.py --revoke
+.venv/bin/python scripts/outlook_auth.py --revoke
 ```
 
 ## Commandes (lecture seule)
 
 ```bash
 # Statut de connexion
-python scripts/outlook_auth.py --status
+.venv/bin/python scripts/outlook_auth.py --status
 
 # Lire les derniers messages
-python scripts/outlook_graph.py messages --folder Inbox --top 10
+.venv/bin/python scripts/outlook_graph.py messages --folder Inbox --top 10
 
 # Détail d'un message (corps complet, Markdown par défaut)
-python scripts/outlook_graph.py message <messageId>
+.venv/bin/python scripts/outlook_graph.py message <messageId>
 
 # Détail en HTML brut (pour extraction/collage)
-python scripts/outlook_graph.py message <messageId> --raw
+.venv/bin/python scripts/outlook_graph.py message <messageId> --raw
 
 # Lister les dossiers mail
-python scripts/outlook_graph.py folders
+.venv/bin/python scripts/outlook_graph.py folders
 
 # Pièces jointes d'un message
-python scripts/outlook_graph.py attachments <messageId>
+.venv/bin/python scripts/outlook_graph.py attachments <messageId>
 
 # Télécharger une pièce jointe
-python scripts/outlook_graph.py download <attachmentId>
+.venv/bin/python scripts/outlook_graph.py download <messageId> --attach-id <attachmentId> --output /path/to/file
 
 # Événements calendrier
-python scripts/outlook_graph.py events --top 10
+.venv/bin/python scripts/outlook_graph.py events --top 10
 
 # Contacts
-python scripts/outlook_graph.py contacts --top 20
+.venv/bin/python scripts/outlook_graph.py contacts --top 20
 
 # Rechercher dans les mails
-python scripts/outlook_graph.py search "mot-clé"
+.venv/bin/python scripts/outlook_graph.py search "mot-clé"
 
 # Profil utilisateur
-python scripts/outlook_graph.py profile
+.venv/bin/python scripts/outlook_graph.py profile
 ```
 
 ## Variables d'environnement (.env)
 
-| Variable | Description | Exemple |
-|---|---|---|
-| `AZURE_TENANT_ID` | GUID du tenant Entra | `52ffb8b9-…` |
-| `AZURE_CLIENT_ID` | ID de l'app (Application ID) | `xxxxxxxx-…` |
-| `AZURE_CLIENT_SECRET` | Secret de l'app | `~` |
-| `AZURE_REDIRECT_URI` | Redirect URI (device flow : tout fait) | `http://localhost` |
-| `OAUTH_TOKEN_URL` | URL token endpoint | `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token` |
-| `OAUTH_DEVICE_CODE_URL` | URL device code endpoint | `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/devicecode` |
-| `MS_GRAPH_BASE_URL` | Base URL Microsoft Graph | `https://graph.microsoft.com/v1.0` |
-| `TOKEN_FILE` | Chemin du fichier de stockage des tokens | `~/.openclaw/outlook_tokens.json` |
-| `TOKEN_FILE_KEY` | Clé de chiffrement (optionnel) | _(vide par défaut)_ |
+| Variable                | Description                              | Exemple                                                             |
+| ----------------------- | ---------------------------------------- | ------------------------------------------------------------------- |
+| `AZURE_TENANT_ID`       | GUID du tenant Entra                     | `52ffb8b9-…`                                                        |
+| `AZURE_CLIENT_ID`       | ID de l'app (Application ID)             | `xxxxxxxx-…`                                                        |
+| `AZURE_CLIENT_SECRET`   | Secret de l'app                          | `~`                                                                 |
+| `AZURE_REDIRECT_URI`    | Redirect URI (device flow : tout fait)   | `http://localhost`                                                  |
+| `OAUTH_TOKEN_URL`       | URL token endpoint                       | `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token`      |
+| `OAUTH_DEVICE_CODE_URL` | URL device code endpoint                 | `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/devicecode` |
+| `MS_GRAPH_BASE_URL`     | Base URL Microsoft Graph                 | `https://graph.microsoft.com/v1.0`                                  |
+| `TOKEN_FILE`            | Chemin du fichier de stockage des tokens | `~/.openclaw/outlook_tokens.json`                                   |
+| `TOKEN_FILE_KEY`        | Clé de chiffrement (optionnel)           | _(vide par défaut)_                                                 |
 
 ## Structure du skill
 
@@ -145,9 +140,11 @@ outlook-entra/
 ├── README.md
 ├── .env.example
 ├── .gitignore
+├── .venv/                   # Environnement virtuel Python (créé via uv venv)
 ├── scripts/
-│   ├── outlook_auth.py      # OAuth device code flow + refresh
+│   ├── outlook_auth.py      # OAuth device code flow + status/revoke
 │   ├── outlook_graph.py     # Appels Graph API (lecture seule)
+│   ├── outlook_refresh.py   # Refresh token automatisé (pour cron)
 │   └── outlook_token.py     # Module partagé (lecture/refresh tokens)
 └── tests/
     └── test_outlook.py      # Tests unitaires
@@ -159,6 +156,29 @@ outlook-entra/
 - Les **refresh tokens** sont automatiquement utilisés quand l'access token expire.
 - Si `TOKEN_FILE_KEY` est défini, les tokens sont chiffrés AES-GCM avant stockage.
 - Les erreurs 401 du Graph API déclenchent un refresh automatique.
+
+## Cron — Refresh automatique du token
+
+Le script `outlook_refresh.py` vérifie si le token expire bientôt et le rafraîchit automatiquement.
+
+**Crontab** — refresh toutes les heures à HH:55 :
+
+```cron
+55 * * * * /home/fred-ghilini/.openclaw/workspace/skills/outlook-entra/.venv/bin/python /home/fred-ghilini/.openclaw/workspace/skills/outlook-entra/scripts/outlook_refresh.py >> /home/fred-ghilini/.openclaw/outlook_refresh.log 2>&1
+```
+
+**Installation** :
+
+```bash
+SKILL_DIR="/home/fred-ghilini/.openclaw/workspace/skills/outlook-entra"
+( crontab -l 2>/dev/null | grep -v outlook_refresh; echo "55 * * * * ${SKILL_DIR}/.venv/bin/python ${SKILL_DIR}/scripts/outlook_refresh.py >> ~/.openclaw/outlook_refresh.log 2>&1" ) | crontab -
+```
+
+**Vérification** :
+
+```bash
+crontab -l | grep outlook_refresh
+```
 
 ## Ressources
 

@@ -13,9 +13,10 @@ Usage :
     python outlook_graph.py search <query>                  # Rechercher dans les mails
 """
 
-import base64
 import argparse
+import base64
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -25,14 +26,14 @@ import html2text
 import requests
 
 # Load .env
-for _env in Path(__file__).parent.parent / ".env", Path(__file__).parent / ".env":
+for _env in [Path(__file__).parent.parent / ".env", Path(__file__).parent / ".env"]:
     if _env.exists():
         with open(_env) as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
                     k, v = line.split("=", 1)
-                    import os
+                    v = v.strip('"').strip("'")
                     os.environ.setdefault(k, v)
 
 import outlook_token as ot
@@ -40,12 +41,13 @@ import outlook_token as ot
 GRAPH_BASE = ot.GRAPH_BASE
 TIMEOUT    = ot.REQUEST_TIMEOUT
 
-# ── HTTP helper ───────────────────────────────────────────────────────────────
+# ── HTTP helpers ───────────────────────────────────────────────────────────────
 
 def graph_get(path: str, params: dict = None, token: str = None) -> dict:
     token = token or ot.ensure_valid_token()
     url   = f"{GRAPH_BASE}{path}"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
     resp = requests.get(url, headers=headers, params=params, timeout=TIMEOUT)
     _handle_error(resp)
     return resp.json()
@@ -54,6 +56,7 @@ def graph_get_raw(path: str, token: str = None) -> requests.Response:
     token = token or ot.ensure_valid_token()
     url   = f"{GRAPH_BASE}{path}"
     headers = {"Authorization": f"Bearer {token}"}
+
     resp = requests.get(url, headers=headers, timeout=TIMEOUT)
     _handle_error(resp)
     return resp
@@ -63,8 +66,21 @@ def _handle_error(resp):
         try:
             err = resp.json()
             msg = err.get("error", {}).get("message", err.get("error", "Unknown"))
+            code = err.get("error", {}).get("code", "")
         except Exception:
             msg = resp.text[:200]
+            code = ""
+
+        # 401 InvalidAuthenticationToken → token expiré ou révoqué
+        if resp.status_code == 401 and code == "InvalidAuthenticationToken":
+            token_path = Path(ot.TOKEN_FILE)
+            if token_path.exists():
+                token_path.unlink()
+            raise RuntimeError(
+                f"Graph API 401 — token invalidé. "
+                f"Relancez l'authentification : python scripts/outlook_auth.py"
+            )
+
         raise RuntimeError(f"Graph API {resp.status_code}: {msg}")
 
 # ── Formatters ────────────────────────────────────────────────────────────────

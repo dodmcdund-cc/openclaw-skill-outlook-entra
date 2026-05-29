@@ -128,3 +128,24 @@ def revoke_token():
     except Exception:
         pass
     Path(TOKEN_FILE).unlink(missing_ok=True)
+
+def refresh_token() -> dict:
+    """Effectue un refresh du token et sauvegarde le nouveau token.
+    Retourne le nouveau token data.
+    """
+    import requests as req
+    token = get_token()
+    if not token or not token.get("refresh_token"):
+        raise RuntimeError("Aucun refresh_token disponible.")
+
+    payload = {
+        "grant_type":    "refresh_token",
+        "client_id":     CLIENT_ID,
+        "refresh_token": token["refresh_token"],
+    }
+    resp = req.post(TOKEN_URL, data=payload, timeout=REQUEST_TIMEOUT)
+    resp.raise_for_status()
+    new_token = resp.json()
+    new_token["expires_at"] = time.time() + new_token.get("expires_in", 3600)
+    save_token(new_token)
+    return new_token

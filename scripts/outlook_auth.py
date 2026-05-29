@@ -58,13 +58,13 @@ import outlook_token as ot
 # ── Device Code Flow ───────────────────────────────────────────────────────────
 
 def device_code_flow(req):
-    """Implémente RFC 8628 — exact matching Fred's working curl commands."""
+    """Implémente RFC 8628 — device code flow pour Microsoft OAuth."""
 
     missing = [v for v, k in [("AZURE_CLIENT_ID", ot.CLIENT_ID),
                                ("AZURE_TENANT_ID", ot.TENANT_ID)]
                if not k]
     if missing:
-        print(f"❌ Variables manquantes dans .env : {', '.join(missing)}", file=sys.stderr)
+        print(f"Variables manquantes dans .env : {', '.join(missing)}", file=sys.stderr)
         sys.exit(1)
 
     headers_dc = {
@@ -72,30 +72,27 @@ def device_code_flow(req):
     }
 
     # ── Step 1 : demander un device code ──────────────────────────────────────
-    print("→ Demande d'autorisation à Microsoft…", file=sys.stderr)
-
+    print("Demande d'autorisation a Microsoft…", file=sys.stderr)
     payload_dc = {
         "client_id": ot.CLIENT_ID,
         "scope": ot.SCOPES_DEVICE_CODE,
     }
-
     resp = req.post(ot.DEVICE_CODE_URL, data=payload_dc, headers=headers_dc,
                     timeout=ot.REQUEST_TIMEOUT)
     _debug_request("POST", ot.DEVICE_CODE_URL, payload_dc, headers_dc, resp)
     resp.raise_for_status()
     data = resp.json()
-
-    device_code   = data["device_code"]
-    user_code     = data["user_code"]
-    verif_uri     = data["verification_uri"]
-    interval      = int(data.get("interval", 5))
-    expires_in    = int(data.get("expires_in", 300))
-    message       = data.get("message", "")
+    device_code = data["device_code"]
+    user_code   = data["user_code"]
+    verif_uri   = data["verification_uri"]
+    interval    = int(data.get("interval", 5))
+    expires_in  = int(data.get("expires_in", 300))
+    message     = data.get("message", "")
 
     # ── Step 2 : afficher les instructions ──────────────────────────────────────
     print()
     print("=" * 60)
-    print("  🔐  AUTHENTIFICATION MICROSOFT — OFFICE 365")
+    print("  AUTHENTIFICATION MICROSOFT — OFFICE 365")
     print("=" * 60)
     print()
     print(f"  1. Ouvrez cette URL dans votre navigateur :")
@@ -106,7 +103,7 @@ def device_code_flow(req):
     print()
     if message:
         print(f"  Message Microsoft : {message}")
-    print(f"  ⏳ En attente… (délai : {expires_in}s)")
+    print(f"  Delai : {expires_in}s")
     print("=" * 60, flush=True)
 
     # ── Step 3 : poll le token endpoint ───────────────────────────────────────
@@ -127,7 +124,7 @@ def device_code_flow(req):
             token_data["expires_at"] = time.time() + token_data.get("expires_in", 3600)
             ot.save_token(token_data)
             print(file=sys.stderr)
-            print("✅ Authentification réussie !", file=sys.stderr)
+            print("Authentification reussie !", file=sys.stderr)
             print(f"   access_token  : {token_data['access_token'][:20]}…", file=sys.stderr)
             print(f"   refresh_token : {token_data.get('refresh_token', 'N/A')[:20]}…",
                   file=sys.stderr)
@@ -147,10 +144,10 @@ def device_code_flow(req):
             continue
 
         # Autres erreurs (y compris 400 HTTP) — on log et on sort
-        print(f"❌ Erreur Microsoft : [{error}] {desc}", file=sys.stderr)
+        print(f"Erreur Microsoft : [{error}] {desc}", file=sys.stderr)
         sys.exit(1)
 
-    print("❌ Délai d'authentification expiré. Relancez la commande.", file=sys.stderr)
+    print("Delai d'authentification expire. Relancez la commande.", file=sys.stderr)
     sys.exit(1)
 
 
@@ -158,18 +155,18 @@ def device_code_flow(req):
 
 def main():
     ap = argparse.ArgumentParser(description="Outlook OAuth 2.0 — device code flow")
-    ap.add_argument("--status", action="store_true", help="Afficher le statut du token")
-    ap.add_argument("--revoke",  action="store_true", help="Révoquer le token et déconnecter")
+    ap.add_argument("--status",      action="store_true", help="Afficher le statut du token")
+    ap.add_argument("--revoke",      action="store_true", help="Revoquer le token et deconnecter")
     args = ap.parse_args()
 
     if args.status:
         token = ot.get_token()
         if not token:
-            print("❌ Aucun token stocké (non authentifié).")
+            print("Aucun token stocke (non authentifie).")
             sys.exit(1)
         expired = ot.is_token_expired(token)
         remaining = max(0, int(token.get("expires_at", 0) - time.time()))
-        status = "⚠️  EXPIRÉ" if expired else f"✅ Valide ({remaining}s restantes)"
+        status = "EXPIRE" if expired else f"Valide ({remaining}s restantes)"
         print(f"Token : {status}")
         print(f"Token type : {token.get('token_type', '?')}")
         print(f"Scope       : {token.get('scope', '?')}")
@@ -177,9 +174,10 @@ def main():
 
     if args.revoke:
         ot.revoke_token()
-        print("✅ Token révoqué et supprimé.")
+        print("Token revoque et supprime.")
         sys.exit(0)
 
+    # Par defaut : lancer le device code flow
     device_code_flow(requests)
 
 

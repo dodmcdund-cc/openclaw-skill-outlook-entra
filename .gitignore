@@ -4,3 +4,5 @@ __pycache__/
 .venv*/
 outlook_tokens.json
 .env
+fresh_tokens.json
+refresh_response.json
