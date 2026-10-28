@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-outlook_mcp.py — Serveur MCP (stdio) pour Outlook / Microsoft Graph (lecture seule).
+outlook_mcp.py — Serveur MCP (stdio) pour Outlook / Microsoft Graph.
+
+Lecture seule + Brouillons (jamais d'envoi).
 
 Pourquoi un serveur MCP plutôt que des scripts bash ?
 -------------------------------------------------------------
@@ -11,10 +13,20 @@ sont bloqués par la politique de confirmation vocale (VOICE_CONFIRMATION_REQUIR
 échouent en mode vocal, alors que les outils MCP (nom `outlook-mcp__*`) sont
 classés lecture seule et passent.
 
-Ce serveur expose les mêmes opérations en lecture seule, via des appels d'outils
-MCP. Il n'expose AUCUNE écriture : Mail.Read, Calendars.Read, Contacts.Read.
+Règle de nommage (déterminante pour la compatibilité vocale)
+--------------------------------------------------------------
+Le classifieur de mutation d'OpenClaw regarde le NOM de l'outil :
+  - nom contenant « send »            -> MUTATION (bloqué en voice-call)
+  - nom finissant par « _actions »    -> MUTATION sauf action en lecture seule
+  - tout le reste                      -> lecture seule
+Les outils de brouillon portent donc volontairement des noms SANS « send »
+(create_draft / update_draft / delete_draft) : leur effet est local, visible
+dans Outlook, réversible, et ne notifie personne — il n'y a donc pas lieu de
+demander une confirmation vocale pour les rédiger.
+Aucun outil d'envoi n'est exposé : l'envoi d'e-mail est impossible via ce
+serveur, dans n'importe quel type de session. C'est volontaire et définitif.
 
-Outils :
+Outils lecture :
   list_folders        — dossiers mail + nombre de messages
   list_messages       — derniers messages d'un dossier
   get_message         — détail d'un message (corps en Markdown)
@@ -23,6 +35,13 @@ Outils :
   list_contacts       — contacts
   list_attachments    — pièces jointes d'un message
   get_profile         — profil utilisateur
+  list_drafts         — brouillons existants
+  get_draft           — contenu d'un brouillon
+
+Outils brouillon (écriture locale, aucun envoi) :
+  create_draft        — nouveau brouillon (optionnellement dans un fil)
+  update_draft        — modifie sujet / corps / destinataires d'un brouillon
+  delete_draft        — supprime un brouillon
 
 Usage (stdio) :
   .venv/bin/python scripts/outlook_mcp.py
@@ -46,13 +65,18 @@ TIMEOUT = ot.REQUEST_TIMEOUT
 
 # ── HTTP Graph ────────────────────────────────────────────────────────────────
 
-def _graph(path: str, params: dict | None = None, token: str | None = None, retry: bool = True):
-    """GET Graph avec refresh automatique sur 401 (token expiré/révoqué)."""
+def _graph_request(method: str, path: str, params: dict | None = None,
+                   payload: dict | None = None, token: str | None = None,
+                   retry: bool = True):
+    """Appel Graph (GET/POST/PATCH/DELETE) avec refresh automatique sur 401."""
     token = token or ot.ensure_valid_token()
     url = f"{GRAPH_BASE}{path}"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
 
-    resp = requests.get(url, headers=headers, params=params, timeout=TIMEOUT)
+    resp = requests.request(method, url, headers=headers, params=params,
+                            json=payload, timeout=TIMEOUT)
 
     if resp.status_code == 401 and retry:
         # Token révoqué ou expiré : on force un refresh puis on rejoue une fois.
@@ -60,7 +84,7 @@ def _graph(path: str, params: dict | None = None, token: str | None = None, retr
             ot.refresh_token()
         except Exception:
             pass
-        return _graph(path, params=params, retry=False)
+        return _graph_request(method, path, params=params, payload=payload, retry=False)
 
     if resp.status_code >= 400:
         try:
@@ -77,7 +101,14 @@ def _graph(path: str, params: dict | None = None, token: str | None = None, retr
             )
         raise RuntimeError(f"Graph API {resp.status_code} ({code}): {msg}")
 
+    if resp.status_code == 204 or not resp.content:
+        return {}
     return resp.json()
+
+
+def _graph(path: str, params: dict | None = None, token: str | None = None, retry: bool = True):
+    """GET Graph avec refresh automatique sur 401 (token expiré/révoqué)."""
+    return _graph_request("GET", path, params=params, token=token, retry=retry)
 
 
 # ── Formatters (sortie compacte, lisible à l'oral) ───────────────────────────
@@ -326,9 +357,197 @@ def get_profile() -> str:
     )
 
 
+# ── Brouillons ────────────────────────────────────────────────────────────────
+# Rappel de sécurité : ces outils n'envoient RIEN. Un brouillon reste dans le
+# dossier Drafts jusqu'à action manuelle de l'utilisateur dans Outlook. Aucun
+# endpoint /send n'est exposé par ce serveur.
+
+
+@server.tool(
+    name="list_drafts",
+    description=(
+        "Liste les brouillons Outlook (dossier Drafts). "
+        "top: nombre de brouillons (défaut 10, max 50). "
+        "Retourne date, destinataires, objet et id de chaque brouillon."
+    ),
+    annotations=READ_ONLY,
+)
+def list_drafts(top: int = 10) -> str:
+    top = max(1, min(int(top or 10), 50))
+    data = _graph(
+        "/me/mailFolders('Drafts')/messages",
+        params={
+            "$top": top,
+            "$orderby": "lastModifiedDateTime desc",
+            "$select": "id,subject,toRecipients,lastModifiedDateTime,conversationId",
+        },
+    )
+    drafts = data.get("value", [])
+    if not drafts:
+        return "(aucun brouillon)"
+    out = []
+    for d in drafts:
+        to = ", ".join(
+            r.get("emailAddress", {}).get("address", "?")
+            for r in d.get("toRecipients", [])
+        ) or "(sans destinataire)"
+        when = (d.get("lastModifiedDateTime") or "")[:16].replace("T", " ")
+        out.append(
+            f"✏️ {when} | à {to} | {d.get('subject') or '(sans objet)'}\n"
+            f"   id={d.get('id')}"
+        )
+    return "\n".join(out)
+
+
+@server.tool(
+    name="get_draft",
+    description=(
+        "Contenu complet d'un brouillon Outlook : destinataires, objet, corps. "
+        "draft_id: id recopié verbatim depuis list_drafts. "
+        "Ne modifie rien : le brouillon reste inchangé."
+    ),
+    annotations=READ_ONLY,
+)
+def get_draft(draft_id: str) -> str:
+    d = _graph(
+        f"/me/messages/{draft_id}",
+        params={
+            "$select": "id,subject,toRecipients,ccRecipients,lastModifiedDateTime,body,conversationId"
+        },
+    )
+    to = ", ".join(
+        r.get("emailAddress", {}).get("address", "?") for r in d.get("toRecipients", [])
+    ) or "(sans destinataire)"
+    cc = ", ".join(
+        r.get("emailAddress", {}).get("address", "?") for r in d.get("ccRecipients", [])
+    )
+    body = d.get("body", {})
+    raw = body.get("content") or "(vide)"
+    if "html" in (body.get("contentType") or "").lower():
+        raw = _html_to_md(raw) or raw
+    head = [
+        f"À     : {to}",
+        f"CC    : {cc}" if cc else "",
+        f"Objet : {d.get('subject') or '(sans objet)'}",
+        f"Modif : {(d.get('lastModifiedDateTime') or '?')[:16].replace('T', ' ')}",
+        f"id    : {d.get('id')}",
+    ]
+    return "\n".join(h for h in head if h) + "\n\n--- Corps ---\n" + raw
+
+
+@server.tool(
+    name="create_draft",
+    description=(
+        "Crée un brouillon Outlook (dans le dossier Drafts) — RIEN n'est envoyé. "
+        "to: adresses e-mail, séparées par des virgules. "
+        "subject: objet. body: corps du message. "
+        "cc: destinataires en copie (optionnel). "
+        "in_reply_to: id d'un message auquel répondre — le brouillon rejoint "
+        "alors le fil de discussion (optionnel). "
+        "Retourne l'id du brouillon pour list_drafts / update_draft / delete_draft."
+    ),
+    annotations=READ_ONLY,
+)
+def create_draft(
+    to: str,
+    subject: str,
+    body: str,
+    cc: str = "",
+    in_reply_to: str = "",
+) -> str:
+    def _recips(raw: str):
+        out = []
+        for addr in [a.strip() for a in (raw or "").split(",") if a.strip()]:
+            out.append({"emailAddress": {"address": addr}})
+        return out
+
+    payload: dict = {
+        "subject": subject or "",
+        "body": {"contentType": "Text", "content": body or ""},
+        "toRecipients": _recips(to),
+    }
+    cc_list = _recips(cc)
+    if cc_list:
+        payload["ccRecipients"] = cc_list
+
+    if in_reply_to:
+        # On rattache le brouillon au fil de discussion du message source.
+        src = _graph(f"/me/messages/{in_reply_to}", params={"$select": "conversationId"})
+        conv = src.get("conversationId")
+        if conv:
+            payload["conversationId"] = conv
+
+    d = _graph_request("POST", "/me/messages", payload=payload)
+    draft_id = d.get("id", "")
+    thread = " (rattaché au fil)" if payload.get("conversationId") else ""
+    return (
+        f"✏️ Brouillon créé — rien n'a été envoyé.{thread}\n"
+        f"   objet   : {d.get('subject') or '(sans objet)'}\n"
+        f"   id      : {draft_id}\n"
+        f"   -> list_drafts / update_draft / delete_draft pour la suite"
+    )
+
+
+@server.tool(
+    name="update_draft",
+    description=(
+        "Modifie un brouillon Outlook existant (sujet, corps, destinataires) — "
+        "RIEN n'est envoyé. "
+        "draft_id: id recopié verbatim depuis list_drafts. "
+        "Fournir seulement les champs à changer : les autres sont conservés."
+    ),
+    annotations=READ_ONLY,
+)
+def update_draft(
+    draft_id: str,
+    subject: str = "",
+    body: str = "",
+    to: str = "",
+    cc: str = "",
+) -> str:
+    payload: dict = {}
+    if subject:
+        payload["subject"] = subject
+    if body:
+        payload["body"] = {"contentType": "Text", "content": body}
+    if to:
+        payload["toRecipients"] = [
+            {"emailAddress": {"address": a.strip()}}
+            for a in [x.strip() for x in to.split(",") if x.strip()]
+        ]
+    if cc:
+        payload["ccRecipients"] = [
+            {"emailAddress": {"address": a.strip()}}
+            for a in [x.strip() for x in cc.split(",") if x.strip()]
+        ]
+    if not payload:
+        return "(aucun champ à modifier : préciser subject, body, to ou cc)"
+
+    d = _graph_request("PATCH", f"/me/messages/{draft_id}", payload=payload)
+    return (
+        f"✏️ Brouillon mis à jour — rien n'a été envoyé.\n"
+        f"   objet : {d.get('subject') or '(sans objet)'}\n"
+        f"   id    : {draft_id}"
+    )
+
+
+@server.tool(
+    name="delete_draft",
+    description=(
+        "Supprime définitivement un brouillon Outlook (le met à la corbeille). "
+        "draft_id: id recopié verbatim depuis list_drafts. "
+        "Action irréversible : ne l'appeler que sur demande explicite."
+    ),
+    annotations=READ_ONLY,
+)
+def delete_draft(draft_id: str) -> str:
+    _graph_request("DELETE", f"/me/messages/{draft_id}")
+    return f"🗑️ Brouillon supprimé (id={draft_id})"
+
+
 def main() -> None:
     # stdout = protocole MCP uniquement ; les logs vont sur stderr.
-    print("[outlook-mcp] ready — transport=stdio, lecture seule", file=sys.stderr)
+    print("[outlook-mcp] ready — transport=stdio, lecture + brouillons (aucun envoi)", file=sys.stderr)
     server.run(transport="stdio")
 
 

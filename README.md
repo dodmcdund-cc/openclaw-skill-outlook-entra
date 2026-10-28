@@ -1,7 +1,7 @@
 # outlook-entra
 
 Microsoft Outlook / Office 365 via OAuth 2.0 (device code flow) et Microsoft Graph API.
-**Lecture seule** — permissions `Mail.Read`, `Calendars.Read`, `Contacts.Read`.
+**Lecture + brouillons** — permissions `Mail.Read`, `Calendars.Read`, `Contacts.Read`. Aucun envoi.
 
 ## Ce que fait ce skill
 
@@ -12,10 +12,17 @@ Microsoft Outlook / Office 365 via OAuth 2.0 (device code flow) et Microsoft Gra
 
 ## Serveur MCP (chemin principal)
 
-Le skill expose un serveur MCP stdio, `outlook-mcp`, avec 8 outils en lecture seule :
+Le skill expose un serveur MCP stdio, `outlook-mcp`, avec 13 outils :
 
-`list_folders` · `list_messages` · `get_message` · `search_messages` ·
-`list_events` · `list_contacts` · `list_attachments` · `get_profile`
+**Lecture** — `list_folders` · `list_messages` · `get_message` ·
+`search_messages` · `list_events` · `list_contacts` · `list_attachments` ·
+`get_profile` · `list_drafts` · `get_draft`
+
+**Brouillons** — `create_draft` · `update_draft` · `delete_draft`
+
+Les brouillons restent dans le dossier Drafts et attendent une action manuelle
+dans Outlook : **aucun endpoint d'envoi n'est exposé**, l'envoi est impossible
+via ce skill.
 
 **Pourquoi MCP plutôt que bash :** en session voice-call, `exec` est bloqué par
 la politique de confirmation vocale (`VOICE_CONFIRMATION_REQUIRED`) dès que la
@@ -34,7 +41,7 @@ Enregistrement (déjà fait dans `~/.openclaw/openclaw.json`) :
 }
 ```
 
-Après modification du serveur : `openclaw mcp reload && openclaw mcp probe outlook-mcp`.
+Après modification du serveur : `openclaw mcp reload && openclaw mcp probe outlook-mcp` (doit annoncer 13 outils).
 
 Le CLI `scripts/outlook_graph.py` reste disponible pour le débogage et les
 traitements par lot, mais **ne fonctionne pas en session voice-call**.

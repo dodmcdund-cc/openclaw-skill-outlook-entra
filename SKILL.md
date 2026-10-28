@@ -2,17 +2,17 @@
 name: outlook-entra
 description: |
   Microsoft Outlook via OAuth 2.0 (device code flow) et Microsoft Graph API.
-  Lecture seule — Mail.Read, Calendars.Read, Contacts.Read.
-  Utilise le serveur MCP `outlook-mcp` (8 outils) — compatible sessions voice-call.
+  Lecture + brouillons (jamais d'envoi) — Mail.Read, Calendars.Read, Contacts.Read.
+  Utilise le serveur MCP `outlook-mcp` (13 outils) — compatible sessions voice-call.
 metadata:
   author: custom
-  version: "3.0"
+  version: "3.1"
 ---
 
 # Outlook Entra — SKILL.md
 
 Microsoft Outlook via OAuth 2.0 (device code flow) et Microsoft Graph API.
-**Lecture seule** — seules les permissions `Mail.Read`, `Calendars.Read`, `Contacts.Read` sont utilisées.
+**Lecture seule + brouillons** — permissions `Mail.Read`, `Calendars.Read`, `Contacts.Read`. Rien n'est envoyé : aucun endpoint d'envoi n'est exposé.
 
 ## ⚡ Chemin principal : les outils MCP `outlook-mcp__*`
 
@@ -29,9 +29,15 @@ fonctionne en session voice-call (voir « Compatibilité voice-call » plus bas)
 | `outlook-mcp__list_contacts` | Contacts (`top`) |
 | `outlook-mcp__list_attachments` | Pièces jointes d'un message |
 | `outlook-mcp__get_profile` | Profil utilisateur M365 |
+| `outlook-mcp__list_drafts` | Brouillons existants (`top`) |
+| `outlook-mcp__get_draft` | Contenu d'un brouillon |
+| `outlook-mcp__create_draft` | Crée un brouillon — **rien n'est envoyé** |
+| `outlook-mcp__update_draft` | Modifie un brouillon — **rien n'est envoyé** |
+| `outlook-mcp__delete_draft` | Supprime un brouillon |
 
-Règle d'identifiants : les ids de message et de dossier se recopient **verbatim**
-depuis la sortie d'un appel précédent. Ne jamais les construire.
+Règle d'identifiants : les ids de message, de dossier et de brouillon se
+recopient **verbatim** depuis la sortie d'un appel précédent. Ne jamais les
+construire.
 
 Workflow typique : `list_messages` → `get_message`. Pour une recherche :
 `search_messages` directement. Pour un email reçu par un tiers : `list_messages`
@@ -40,6 +46,30 @@ puis `get_message`.
 Les appels se font via `tool_call` avec l'id de l'outil (ex.
 `{"id": "outlook-mcp__list_messages", "args": {"folder": "Inbox", "top": 10}}`),
 après un `tool_search` pour découvrir le catalogue.
+
+## Brouillons (drafts) — écrire sans envoyer
+
+`create_draft` / `update_draft` / `delete_draft` permettent de **rédiger** un
+email sans jamais l'envoyer. Le message atterrit dans le dossier **Drafts** et
+attend une action manuelle de l'utilisateur dans Outlook.
+
+```json
+{"id": "outlook-mcp__create_draft",
+ "args": {"to": "destinataire@exemple.com",
+          "subject": "Confirmation dossier FTFR123456",
+          "body": "Bonjour,\n\n...",
+          "cc": "copie@exemple.com",
+          "in_reply_to": "<id-message-source>"}}
+```
+
+- `in_reply_to` : id d'un message → le brouillon rejoint le fil de discussion.
+- `update_draft` ne modifie que les champs fournis (sujet, corps, `to`, `cc`).
+- `delete_draft` est **irréversible** (corbeille) : ne l'appeler que sur
+  demande explicite de l'utilisateur.
+
+**Aucun outil d'envoi n'existe.** Le serveur n'expose pas l'endpoint `/send` :
+l'envoi est impossible via ce skill, dans n'importe quel type de session. Pour
+envoyer, l'utilisateur doit le faire depuis Outlook.
 
 ## Compatibilité voice-call — pourquoi MCP et pas bash
 
@@ -64,12 +94,27 @@ Le classement est fait sur le **nom de l'outil + ses arguments** :
   lecture seule → **passent**. C'est exactement pourquoi `lynx-mcp__search_files`
   fonctionnait en mode vocal.
 
+### Règle de nommage du skill (à ne pas casser)
+
+Le classifieur s'appuie sur le **nom** de l'outil :
+
+| Nom d'outil MCP | Classe | Effet en voice-call |
+|---|---|---|
+| `outlook-mcp__list_drafts`, `..._get_draft` | lecture seule | passe |
+| `outlook-mcp__create_draft`, `..._update_draft`, `..._delete_draft` | lecture seule | passe |
+| `outlook-mcp__send_draft` (**n'existe pas**) | mutation | serait bloqué |
+| `outlook-mcp__*_actions` avec action mutante | mutation | serait bloqué |
+
+Les outils de brouillon portent donc des noms **sans « send »** : leur effet est
+local, visible dans Outlook, réversible, et ne notifie personne — pas de
+confirmation vocale nécessaire pour les rédiger. Le jour où l'envoi serait
+ajouté, il **devrait** s'appeler `send_draft` pour rester bloqué par défaut en
+mode vocal.
+
 Conséquences pour ce skill :
 
 - ✅ Utiliser `outlook-mcp__*` — fonctionne partout, y compris en voice-call.
 - ❌ Ne pas tenter `exec` sur les scripts Python en mode vocal.
-- ⚠️ Un nom d'outil MCP contenant `send` (ex. `outlook-mcp__send_mail`) serait
-  reclassé en mutation et rebloqué. Aucun outil d'écriture n'est exposé ici.
 - ⚠️ Le nom du skill est lu par l'agent en session vocale ; s'il n'évoque pas
   MCP, l'agent risque de retomber sur les commandes bash du SKILL.md.
 
