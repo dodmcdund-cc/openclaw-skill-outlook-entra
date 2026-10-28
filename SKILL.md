@@ -71,6 +71,13 @@ attend une action manuelle de l'utilisateur dans Outlook.
 l'envoi est impossible via ce skill, dans n'importe quel type de session. Pour
 envoyer, l'utilisateur doit le faire depuis Outlook.
 
+> ⚠️ **Piège Graph API — `/reply` ENVOIE, il ne crée pas de brouillon.**
+> `POST /me/messages/{id}/reply` expédie réellement l'e-mail (HTTP 202 « Accepted »,
+> aucune trace locale). Seul `POST /me/messages` crée un brouillon (`isDraft=true`) ;
+> `POST /me/messages/{id}/createReply` en crée un aussi.
+> Le serveur bloque explicitement `/send`, `/reply`, `/replyAll` et `/forward`
+> (`_assert_no_send`) — ne pas contourner ce garde-fou.
+
 ## Compatibilité voice-call — pourquoi MCP et pas bash
 
 En session voice-call (Talk / realtime), les appels d'outils « à fort impact »

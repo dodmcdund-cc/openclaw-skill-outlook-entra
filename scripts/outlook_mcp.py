@@ -62,6 +62,36 @@ import outlook_token as ot
 GRAPH_BASE = ot.GRAPH_BASE
 TIMEOUT = ot.REQUEST_TIMEOUT
 
+# ── Garde-fou : aucun envoi ──────────────────────────────────────────────────
+# L'API Microsoft Graph distingue « créer un brouillon » et « envoyer » :
+#   POST /me/messages                     -> CRÉE UN BROUILLON (isDraft=true)
+#   POST /me/messages/{id}/reply          -> ENVOIE RÉELLEMENT le message
+#   POST /me/messages/{id}/createReply    -> crée un brouillon de réponse
+#   POST /me/messages/{id}/send           -> ENVOIE RÉELLEMENT le message
+# Seuls les deux premiers usages sont autorisés ici. Les endpoints d'envoi sont
+# bloqués explicitement : côté Graph l'erreur de nommage est silencieuse
+# (HTTP 202 « Accepted »), ce qui expédie un vrai e-mail sans laisser de trace
+# locale. C'est exactement ce qui s'est produit pendant le développement.
+_SEND_ENDPOINT_MARKERS = ("/send", "/reply", "/replyall", "/forward")
+
+
+def _assert_no_send(path: str, method: str) -> None:
+    """Bloque tout endpoint Graph qui expédie un message.
+
+    On compare le DERNIER segment du chemin, pas une sous-chaîne : les ids
+    Outlook sont en base64 et contiennent des « / », donc une recherche de
+    sous-chaîne produirait des faux positifs sur certains ids.
+    """
+    lowered = path.lower().rstrip("/")
+    for marker in _SEND_ENDPOINT_MARKERS:
+        if lowered.endswith(marker):
+            raise RuntimeError(
+                f"Endpoint d'envoi bloqué par le garde-fou : {method} {path}. "
+                "Ce serveur n'envoie jamais d'e-mail. Pour rédiger, utiliser "
+                "create_draft (POST /me/messages) ; pour rattacher un brouillon "
+                "à un fil, renseigner conversationId."
+            )
+
 
 # ── HTTP Graph ────────────────────────────────────────────────────────────────
 
@@ -69,6 +99,7 @@ def _graph_request(method: str, path: str, params: dict | None = None,
                    payload: dict | None = None, token: str | None = None,
                    retry: bool = True):
     """Appel Graph (GET/POST/PATCH/DELETE) avec refresh automatique sur 401."""
+    _assert_no_send(path, method)
     token = token or ot.ensure_valid_token()
     url = f"{GRAPH_BASE}{path}"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
