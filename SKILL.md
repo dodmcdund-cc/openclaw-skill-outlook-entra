@@ -3,9 +3,10 @@ name: outlook-entra
 description: |
   Microsoft Outlook via OAuth 2.0 (device code flow) et Microsoft Graph API.
   Lecture seule — Mail.Read, Calendars.Read, Contacts.Read.
+  Utilise le serveur MCP `outlook-mcp` (8 outils) — compatible sessions voice-call.
 metadata:
   author: custom
-  version: "2.0"
+  version: "3.0"
 ---
 
 # Outlook Entra — SKILL.md
@@ -13,35 +14,107 @@ metadata:
 Microsoft Outlook via OAuth 2.0 (device code flow) et Microsoft Graph API.
 **Lecture seule** — seules les permissions `Mail.Read`, `Calendars.Read`, `Contacts.Read` sont utilisées.
 
-## Prérequis
+## ⚡ Chemin principal : les outils MCP `outlook-mcp__*`
 
-- App enregistrée sur **Entra** (Azure AD) avec permissions :
-  - `Mail.Read`, `Calendars.Read`, `Contacts.Read`
-  - OAuth 2.0 device code flow activé
-- Python 3.8+ avec `requests`, `html2text`, `cryptography`
-- **Python 3.8+ avec un `.venv` créé dans le répertoire du skill** (`uv venv .venv && uv pip install html2text requests cryptography`)
-- Fichier `.env` configuré (voir `.env.example`)
+**Toujours passer par les outils MCP, jamais par bash.** C'est la seule voie qui
+fonctionne en session voice-call (voir « Compatibilité voice-call » plus bas).
+
+| Outil | Rôle |
+|---|---|
+| `outlook-mcp__list_folders` | Dossiers mail + nombre de messages |
+| `outlook-mcp__list_messages` | Derniers messages d'un dossier (`folder`, `top`) |
+| `outlook-mcp__get_message` | Détail d'un message, corps en Markdown |
+| `outlook-mcp__search_messages` | Recherche plein texte (`query`, `top`) |
+| `outlook-mcp__list_events` | Calendrier (`top`) |
+| `outlook-mcp__list_contacts` | Contacts (`top`) |
+| `outlook-mcp__list_attachments` | Pièces jointes d'un message |
+| `outlook-mcp__get_profile` | Profil utilisateur M365 |
+
+Règle d'identifiants : les ids de message et de dossier se recopient **verbatim**
+depuis la sortie d'un appel précédent. Ne jamais les construire.
+
+Workflow typique : `list_messages` → `get_message`. Pour une recherche :
+`search_messages` directement. Pour un email reçu par un tiers : `list_messages`
+puis `get_message`.
+
+Les appels se font via `tool_call` avec l'id de l'outil (ex.
+`{"id": "outlook-mcp__list_messages", "args": {"folder": "Inbox", "top": 10}}`),
+après un `tool_search` pour découvrir le catalogue.
+
+## Compatibilité voice-call — pourquoi MCP et pas bash
+
+En session voice-call (Talk / realtime), les appels d'outils « à fort impact »
+sont bloqués avant exécution par la **politique de confirmation vocale** :
+
+```
+VOICE_CONFIRMATION_REQUIRED:<id> The high-impact voice action "exec" was not executed.
+```
+
+Le déblocage exige une confirmation **parlée** relayée par l'outil
+`openclaw_agent_consult`, qui n'existe pas dans le catalogue d'un agent textuel :
+l'agent tourne donc en boucle sur `exec` sans jamais pouvoir confirmer.
+
+Le classement est fait sur le **nom de l'outil + ses arguments** :
+
+- `exec` / `bash` → mutation, **sauf** si la commande est un simple
+  `cat`/`head`/`tail`/`grep`/`ls`/`wc`/`pwd`/`stat`/`rg`/`sed`/`find` en lecture seule.
+  Donc `.venv/bin/python scripts/outlook_graph.py …` est **bloqué**.
+- `automations`, `message` (envoi), `write`, `edit`, `sessions_spawn` → bloqués aussi.
+- Les outils **MCP** dont le nom ne contient ni `send` ni `_actions` → classés
+  lecture seule → **passent**. C'est exactement pourquoi `lynx-mcp__search_files`
+  fonctionnait en mode vocal.
+
+Conséquences pour ce skill :
+
+- ✅ Utiliser `outlook-mcp__*` — fonctionne partout, y compris en voice-call.
+- ❌ Ne pas tenter `exec` sur les scripts Python en mode vocal.
+- ⚠️ Un nom d'outil MCP contenant `send` (ex. `outlook-mcp__send_mail`) serait
+  reclassé en mutation et rebloqué. Aucun outil d'écriture n'est exposé ici.
+- ⚠️ Le nom du skill est lu par l'agent en session vocale ; s'il n'évoque pas
+  MCP, l'agent risque de retomber sur les commandes bash du SKILL.md.
+
+## Vocabulaire voice-call
+
+- Répondre **en une phrase courte** pour chaque résultat (date, expéditeur, objet).
+- Ne pas intégrer le corps complet d'un email dans une réponse orale : le lire
+  par dessus, ou demander confirmation avant de le dicter.
+- Un email lu est long : en mode vocal, proposer d'abord la liste (expéditeur +
+  objet), puis le détail si l'utilisateur le demande.
 
 ## Installation
 
-```bash
-# Créer l'environnement virtuel (obligatoire)
-cd ~/.openclaw/workspace/skills/outlook-entra
-uv venv .venv
-uv pip install html2text requests cryptography
+Le serveur MCP est déjà enregistré dans `~/.openclaw/openclaw.json` :
 
-# Copier et éditer la config
-cp .env.example .env
-# ⚠️ Remplir client_id, client_secret, tenant_id dans .env
+```json
+"outlook-mcp": {
+  "command": "/home/fred-ghilini/.openclaw/skills/outlook-entra/.venv/bin/python",
+  "args": ["/home/fred-ghilini/.openclaw/skills/outlook-entra/scripts/outlook_mcp.py"],
+  "cwd": "/home/fred-ghilini/.openclaw/skills/outlook-entra"
+}
 ```
 
-## Authentification (Flow)
+Après toute modification du serveur : `openclaw mcp reload` puis
+`openclaw mcp probe outlook-mcp` (doit annoncer 8 outils).
+
+Dépendances Python (venv du skill) : `mcp`, `requests`, `html2text`, `cryptography`.
+
+```bash
+cd ~/.openclaw/skills/outlook-entra
+uv venv .venv
+uv pip install mcp requests html2text cryptography
+```
+
+## Authentification (Flow) — operationally manual
 
 Le device code flow (RFC 8628) nécessite une intervention utilisateur unique.
+**Cette étape se fait en session texte** : elle exige d'afficher un code et
+d'attendre la validation dans un navigateur. En session vocale, ce n'est pas
+faisable — le token doit déjà être valide.
 
 ### Étape 1 — Lancer le script d'auth
 
 ```bash
+cd ~/.openclaw/skills/outlook-entra
 .venv/bin/python scripts/outlook_auth.py
 ```
 
@@ -65,10 +138,12 @@ Une fois confirmé, les tokens sont sauvegardés localement.
 - Le `refresh_token` permet d'obtenir un nouvel `access_token` sans intervention
 - Le refresh est **automatisé par cron** toutes les heures (voir section Cron)
 - Si le `refresh_token` expire aussi (plusieurs mois d'inactivité) → relancer le flow complet
+- Le serveur MCP gère aussi le refresh à la demande : sur un 401 Graph, il
+  rafraîchit et rejoue la requête une fois.
 
 ---
 
-### Commandes utiles
+### Commandes utiles (CLI — à éviter en mode vocal)
 
 ```bash
 # Vérifier le statut du token
@@ -81,7 +156,10 @@ Une fois confirmé, les tokens sont sauvegardés localement.
 .venv/bin/python scripts/outlook_auth.py --revoke
 ```
 
-## Commandes (lecture seule)
+## Commandes CLI (lecture seule) — équivalent MCP
+
+Utile en session texte pour un débogage rapide ou un traitement par lot.
+**Ces commandes sont bloquées en session voice-call** (voir plus haut).
 
 ```bash
 # Statut de connexion
@@ -118,6 +196,14 @@ Une fois confirmé, les tokens sont sauvegardés localement.
 .venv/bin/python scripts/outlook_graph.py profile
 ```
 
+## Prérequis
+
+- App enregistrée sur **Entra** (Azure AD) avec permissions :
+  - `Mail.Read`, `Calendars.Read`, `Contacts.Read`
+  - OAuth 2.0 device code flow activé
+- Fichier `.env` configuré (voir `.env.example`)
+- Token déjà authentifié (device code flow effectué au moins une fois)
+
 ## Variables d'environnement (.env)
 
 | Variable                | Description                              | Exemple                                                             |
@@ -143,7 +229,8 @@ outlook-entra/
 ├── .venv/                   # Environnement virtuel Python (créé via uv venv)
 ├── scripts/
 │   ├── outlook_auth.py      # OAuth device code flow + status/revoke
-│   ├── outlook_graph.py     # Appels Graph API (lecture seule)
+│   ├── outlook_graph.py     # Appels Graph API (lecture seule) — CLI
+│   ├── outlook_mcp.py       # Serveur MCP stdio (8 outils, lecture seule) — chemin principal
 │   ├── outlook_refresh.py   # Refresh token automatisé (pour cron)
 │   └── outlook_token.py     # Module partagé (lecture/refresh tokens)
 └── tests/
@@ -155,7 +242,10 @@ outlook-entra/
 - Le **device code flow** (RFC 8628) : l'utilisateur authentifie via `https://microsoft.com/devicelogin`. Une seule fois.
 - Les **refresh tokens** sont automatiquement utilisés quand l'access token expire.
 - Si `TOKEN_FILE_KEY` est défini, les tokens sont chiffrés AES-GCM avant stockage.
-- Les erreurs 401 du Graph API déclenchent un refresh automatique.
+- Les erreurs 401 du Graph API déclenchent un refresh automatique (CLI et serveur MCP).
+- Le serveur MCP recharge le token à la demande : sur 401, il rafraîchit et rejoue une fois.
+- Les identifiants de message Outlook sont longs et opaques : les recopier **verbatim**
+  depuis la sortie d'un appel précédent, ne jamais les reconstruire ni les tronquer.
 
 ## Cron — Refresh automatique du token
 
@@ -164,13 +254,13 @@ Le script `outlook_refresh.py` vérifie si le token expire bientôt et le rafra�
 **Crontab** — refresh toutes les heures à HH:55 :
 
 ```cron
-55 * * * * /home/fred-ghilini/.openclaw/workspace/skills/outlook-entra/.venv/bin/python /home/fred-ghilini/.openclaw/workspace/skills/outlook-entra/scripts/outlook_refresh.py >> /home/fred-ghilini/.openclaw/outlook_refresh.log 2>&1
+55 * * * * /home/fred-ghilini/.openclaw/skills/outlook-entra/.venv/bin/python /home/fred-ghilini/.openclaw/skills/outlook-entra/scripts/outlook_refresh.py >> /home/fred-ghilini/.openclaw/outlook_refresh.log 2>&1
 ```
 
 **Installation** :
 
 ```bash
-SKILL_DIR="/home/fred-ghilini/.openclaw/workspace/skills/outlook-entra"
+SKILL_DIR="/home/fred-ghilini/.openclaw/skills/outlook-entra"
 ( crontab -l 2>/dev/null | grep -v outlook_refresh; echo "55 * * * * ${SKILL_DIR}/.venv/bin/python ${SKILL_DIR}/scripts/outlook_refresh.py >> ~/.openclaw/outlook_refresh.log 2>&1" ) | crontab -
 ```
 

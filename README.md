@@ -10,6 +10,35 @@ Microsoft Outlook / Office 365 via OAuth 2.0 (device code flow) et Microsoft Gra
 - Token OAuth chiffré (AES-GCM) avant stockage
 - Refresh automatique du token par cron
 
+## Serveur MCP (chemin principal)
+
+Le skill expose un serveur MCP stdio, `outlook-mcp`, avec 8 outils en lecture seule :
+
+`list_folders` · `list_messages` · `get_message` · `search_messages` ·
+`list_events` · `list_contacts` · `list_attachments` · `get_profile`
+
+**Pourquoi MCP plutôt que bash :** en session voice-call, `exec` est bloqué par
+la politique de confirmation vocale (`VOICE_CONFIRMATION_REQUIRED`) dès que la
+commande n'est pas un simple `cat`/`head`/`grep`. Les appels `python scripts/…`
+sont donc bloqués, alors que les outils MCP sont classés lecture seule et
+passent. Le skill est utilisable à l'identique en webchat, en Telegram et au
+téléphone.
+
+Enregistrement (déjà fait dans `~/.openclaw/openclaw.json`) :
+
+```json
+"outlook-mcp": {
+  "command": "/home/fred-ghilini/.openclaw/skills/outlook-entra/.venv/bin/python",
+  "args": ["/home/fred-ghilini/.openclaw/skills/outlook-entra/scripts/outlook_mcp.py"],
+  "cwd": "/home/fred-ghilini/.openclaw/skills/outlook-entra"
+}
+```
+
+Après modification du serveur : `openclaw mcp reload && openclaw mcp probe outlook-mcp`.
+
+Le CLI `scripts/outlook_graph.py` reste disponible pour le débogage et les
+traitements par lot, mais **ne fonctionne pas en session voice-call**.
+
 ## Prérequis
 
 - Python 3.8+ (`requests`, `cryptography`, `html2text`)
